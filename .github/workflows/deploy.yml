@@ -8,11 +8,7 @@ on:
     branches: [main]
 
 env:
-  REPO_NAME: ${{ github.event.repository.name }}
-  BASE_PATH: ${{ secrets.BASE_PATH }}
-
-- run: |
-  [ $BASE_PATH ] || BASE_PATH="/${REPO_NAME}"
+  BASE_PATH: ${{ secrets.BASE_PATH }} || "/ya-webadb"
 
 jobs:
   build:
