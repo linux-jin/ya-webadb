@@ -1,4 +1,4 @@
-# 📱 Android Debug Bridge (ADB) for Web Browsers 
+# 📱 Android Debug Bridge (ADB) for Web Browsers
 
 [![GitHub license](https://img.shields.io/github/license/yume-chan/ya-webadb)](https://github.com/yume-chan/ya-webadb/blob/main/LICENSE)
 
