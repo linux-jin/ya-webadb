@@ -8,7 +8,7 @@ on:
     branches: [main]
 
 env:
-  BASE_PATH: ${{ secrets.BASE_PATH }} || "/ya-webadb"
+  BASE_PATH: /ya-webadb
 
 jobs:
   build:
