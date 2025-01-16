@@ -1,5 +1,5 @@
 export function escapeArg(s: string) {
-    let result = '';
+    let result = "";
     result += `'`;
 
     let base = 0;
@@ -10,7 +10,7 @@ export function escapeArg(s: string) {
             break;
         }
         result += s.substring(base, found);
-        // a'b becomes a'\'b
+        // a'b becomes a'\'b (the backslash is not a escape character)
         result += String.raw`'\''`;
         base = found + 1;
     }

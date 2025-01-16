@@ -1,65 +1,103 @@
-import type { BufferedReadableStream } from '@yume-chan/stream-extra';
-import Struct, { type StructAsyncDeserializeStream, type StructLike, type StructValueType } from '@yume-chan/struct';
+import { getUint32LittleEndian } from "@yume-chan/no-data-view";
+import type { AsyncExactReadable, StructLike } from "@yume-chan/struct";
+import { decodeUtf8, string, struct, u32 } from "@yume-chan/struct";
 
-import { decodeUtf8 } from '../../utils/index.js';
-
-export enum AdbSyncResponseId {
-    Entry = 'DENT',
-    Entry2 = 'DNT2',
-    Lstat = 'STAT',
-    Stat = 'STA2',
-    Lstat2 = 'LST2',
-    Done = 'DONE',
-    Data = 'DATA',
-    Ok = 'OKAY',
-    Fail = 'FAIL',
+function encodeAsciiUnchecked(value: string): Uint8Array {
+    const result = new Uint8Array(value.length);
+    for (let i = 0; i < value.length; i += 1) {
+        result[i] = value.charCodeAt(i);
+    }
+    return result;
 }
 
-// DONE responses' size are always same as the request's normal response.
-// For example DONE responses for LIST requests are 16 bytes (same as DENT responses),
-// but DONE responses for STAT requests are 12 bytes (same as STAT responses)
-// So we need to know responses' size in advance.
-export class AdbSyncDoneResponse implements StructLike<AdbSyncDoneResponse> {
-    private length: number;
+/**
+ * Encode ID to numbers for faster comparison
+ * @param value A 4-character string
+ * @returns A 32-bit integer by encoding the string as little-endian
+ *
+ * #__NO_SIDE_EFFECTS__
+ */
+export function adbSyncEncodeId(value: string): number {
+    const buffer = encodeAsciiUnchecked(value);
+    return getUint32LittleEndian(buffer, 0);
+}
 
-    public readonly id = AdbSyncResponseId.Done;
+export const AdbSyncResponseId = {
+    Entry: adbSyncEncodeId("DENT"),
+    Entry2: adbSyncEncodeId("DNT2"),
+    Lstat: adbSyncEncodeId("STAT"),
+    Stat: adbSyncEncodeId("STA2"),
+    Lstat2: adbSyncEncodeId("LST2"),
+    Done: adbSyncEncodeId("DONE"),
+    Data: adbSyncEncodeId("DATA"),
+    Ok: adbSyncEncodeId("OKAY"),
+    Fail: adbSyncEncodeId("FAIL"),
+};
 
-    public constructor(length: number) {
-        this.length = length;
+export class AdbSyncError extends Error {}
+
+export const AdbSyncFailResponse = struct(
+    { message: string(u32) },
+    {
+        littleEndian: true,
+        postDeserialize(value) {
+            throw new AdbSyncError(value.message);
+        },
+    },
+);
+
+export async function adbSyncReadResponse<T>(
+    stream: AsyncExactReadable,
+    id: number | string,
+    type: StructLike<T>,
+): Promise<T> {
+    if (typeof id === "string") {
+        id = adbSyncEncodeId(id);
     }
 
-    public async deserialize(stream: StructAsyncDeserializeStream): Promise<this> {
-        await stream.read(this.length);
-        return this;
+    const buffer = await stream.readExactly(4);
+    switch (getUint32LittleEndian(buffer, 0)) {
+        case AdbSyncResponseId.Fail:
+            await AdbSyncFailResponse.deserialize(stream);
+            throw new Error("Unreachable");
+        case id:
+            return await type.deserialize(stream);
+        default:
+            throw new Error(
+                `Expected '${id}', but got '${decodeUtf8(buffer)}'`,
+            );
     }
 }
 
-export const AdbSyncFailResponse =
-    new Struct({ littleEndian: true })
-        .uint32('messageLength')
-        .string('message', { lengthField: 'messageLength' })
-        .postDeserialize(object => {
-            throw new Error(object.message);
-        });
-
-export async function adbSyncReadResponse<T extends Record<string, StructLike<any>>>(
-    stream: BufferedReadableStream,
-    types: T,
-    // When `T` is a union type, `T[keyof T]` only includes their common keys.
-    // For example, let `type T = { a: string, b: string } | { a: string, c: string}`,
-    // `keyof T` is `'a'`, not `'a' | 'b' | 'c'`.
-    // However, `T extends unknown ? keyof T : never` will distribute `T`,
-    // so returns all keys.
-): Promise<StructValueType<T extends unknown ? T[keyof T] : never>> {
-    const id = decodeUtf8(await stream.read(4));
-
-    if (id === AdbSyncResponseId.Fail) {
-        await AdbSyncFailResponse.deserialize(stream);
+export async function* adbSyncReadResponses<T>(
+    stream: AsyncExactReadable,
+    id: number | string,
+    type: StructLike<T>,
+): AsyncGenerator<T, void, void> {
+    if (typeof id === "string") {
+        id = adbSyncEncodeId(id);
     }
 
-    if (types[id]) {
-        return types[id]!.deserialize(stream);
+    while (true) {
+        const buffer = await stream.readExactly(4);
+        switch (getUint32LittleEndian(buffer, 0)) {
+            case AdbSyncResponseId.Fail:
+                await AdbSyncFailResponse.deserialize(stream);
+                throw new Error("Unreachable");
+            case AdbSyncResponseId.Done:
+                // `DONE` responses' size are always same as the request's normal response.
+                //
+                // For example, `DONE` responses for `LIST` requests are 16 bytes (same as `DENT` responses),
+                // but `DONE` responses for `STAT` requests are 12 bytes (same as `STAT` responses).
+                await stream.readExactly(type.size);
+                return;
+            case id:
+                yield await type.deserialize(stream);
+                break;
+            default:
+                throw new Error(
+                    `Expected '${id}' or '${AdbSyncResponseId.Done}', but got '${decodeUtf8(buffer)}'`,
+                );
+        }
     }
-
-    throw new Error(`Expected '${Object.keys(types).join(', ')}', but got '${id}'`);
 }

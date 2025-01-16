@@ -1,97 +1,46 @@
-import { PromiseResolver } from '@yume-chan/async';
-import { pipeFrom, PushReadableStream, StructDeserializeStream, StructSerializeStream, TransformStream, WritableStream, type WritableStreamDefaultWriter, type PushReadableStreamController, type ReadableStream } from '@yume-chan/stream-extra';
-import Struct, { placeholder, type StructValueType } from '@yume-chan/struct';
+import { PromiseResolver } from "@yume-chan/async";
+import type {
+    PushReadableStreamController,
+    ReadableStream,
+    WritableStreamDefaultWriter,
+} from "@yume-chan/stream-extra";
+import {
+    MaybeConsumable,
+    PushReadableStream,
+    StructDeserializeStream,
+    WritableStream,
+} from "@yume-chan/stream-extra";
+import type { StructValue } from "@yume-chan/struct";
+import { buffer, struct, u32, u8 } from "@yume-chan/struct";
 
-import type { Adb } from '../../../adb.js';
-import { AdbFeatures } from '../../../features.js';
-import type { AdbSocket } from '../../../socket/index.js';
-import { encodeUtf8 } from '../../../utils/index.js';
-import type { AdbSubprocessProtocol } from './types.js';
+import type { Adb, AdbSocket } from "../../../adb.js";
+import { AdbFeature } from "../../../features.js";
+import { encodeUtf8 } from "../../../utils/index.js";
 
-export enum AdbShellProtocolId {
-    Stdin,
-    Stdout,
-    Stderr,
-    Exit,
-    CloseStdin,
-    WindowSizeChange,
-}
+import type { AdbSubprocessProtocol } from "./types.js";
 
-// This packet format is used in both direction.
-const AdbShellProtocolPacket =
-    new Struct({ littleEndian: true })
-        .uint8('id', placeholder<AdbShellProtocolId>())
-        .uint32('length')
-        .uint8Array('data', { lengthField: 'length' });
+export const AdbShellProtocolId = {
+    Stdin: 0,
+    Stdout: 1,
+    Stderr: 2,
+    Exit: 3,
+    CloseStdin: 4,
+    WindowSizeChange: 5,
+} as const;
 
-type AdbShellProtocolPacketInit = typeof AdbShellProtocolPacket['TInit'];
+export type AdbShellProtocolId =
+    (typeof AdbShellProtocolId)[keyof typeof AdbShellProtocolId];
 
-type AdbShellProtocolPacket = StructValueType<typeof AdbShellProtocolPacket>;
+// This packet format is used in both directions.
+export const AdbShellProtocolPacket = struct(
+    {
+        id: u8<AdbShellProtocolId>(),
+        data: buffer(u32),
+    },
+    { littleEndian: true },
+);
 
-class StdinSerializeStream extends TransformStream<Uint8Array, AdbShellProtocolPacketInit>{
-    constructor() {
-        super({
-            transform(chunk, controller) {
-                controller.enqueue({
-                    id: AdbShellProtocolId.Stdin,
-                    data: chunk,
-                });
-            },
-            flush() {
-                // TODO: AdbShellSubprocessProtocol: support closing stdin
-            }
-        });
-    }
-}
-
-class StdoutDeserializeStream extends TransformStream<AdbShellProtocolPacket, Uint8Array>{
-    constructor(type: AdbShellProtocolId.Stdout | AdbShellProtocolId.Stderr) {
-        super({
-            transform(chunk, controller) {
-                if (chunk.id === type) {
-                    controller.enqueue(chunk.data);
-                }
-            },
-        });
-    }
-}
-
-class MultiplexStream<T>{
-    private _readable: PushReadableStream<T>;
-    private _readableController!: PushReadableStreamController<T>;
-    public get readable() { return this._readable; }
-
-    private _activeCount = 0;
-
-    constructor() {
-        this._readable = new PushReadableStream(controller => {
-            this._readableController = controller;
-        });
-    }
-
-    public createWriteable() {
-        return new WritableStream<T>({
-            start: () => {
-                this._activeCount += 1;
-            },
-            write: async (chunk) => {
-                await this._readableController.enqueue(chunk);
-            },
-            abort: async (e) => {
-                this._activeCount -= 1;
-                if (this._activeCount === 0) {
-                    this._readableController.close();
-                }
-            },
-            close: async () => {
-                this._activeCount -= 1;
-                if (this._activeCount === 0) {
-                    this._readableController.close();
-                }
-            },
-        });
-    }
-}
+type AdbShellProtocolPacket = StructValue<typeof AdbShellProtocolPacket>;
 
 /**
  * Shell v2 a.k.a Shell Protocol
@@ -102,90 +51,121 @@ class MultiplexStream<T>{
  * * `resize`: Yes
  */
 export class AdbSubprocessShellProtocol implements AdbSubprocessProtocol {
-    public static isSupported(adb: Adb) {
-        return adb.features!.includes(AdbFeatures.ShellV2);
+    static isSupported(adb: Adb) {
+        return adb.canUseFeature(AdbFeature.ShellV2);
     }
 
-    public static async pty(adb: Adb, command: string) {
+    static async pty(adb: Adb, command: string) {
         // TODO: AdbShellSubprocessProtocol: Support setting `XTERM` environment variable
-        return new AdbSubprocessShellProtocol(await adb.createSocket(`shell,v2,pty:${command}`));
-    }
-
-    public static async raw(adb: Adb, command: string) {
-        return new AdbSubprocessShellProtocol(await adb.createSocket(`shell,v2,raw:${command}`));
-    }
-
-    private readonly _socket: AdbSocket;
-    private _socketWriter: WritableStreamDefaultWriter<AdbShellProtocolPacketInit>;
-
-    private _stdin: WritableStream<Uint8Array>;
-    public get stdin() { return this._stdin; }
-
-    private _stdout: ReadableStream<Uint8Array>;
-    public get stdout() { return this._stdout; }
-
-    private _stderr: ReadableStream<Uint8Array>;
-    public get stderr() { return this._stderr; }
-
-    private readonly _exit = new PromiseResolver<number>();
-    public get exit() { return this._exit.promise; }
-
-    public constructor(socket: AdbSocket) {
-        this._socket = socket;
-
-        // Check this image to help you understand the stream graph
-        // cspell: disable-next-line
-        // https://www.plantuml.com/plantuml/png/bL91QiCm4Bpx5SAdv90lb1JISmiw5XzaQKf5PIkiLZIqzEyLSg8ks13gYtOykpFhiOw93N6UGjVDqK7rZsxKqNw0U_NTgVAy4empOy2mm4_olC0VEVEE47GUpnGjKdgXoD76q4GIEpyFhOwP_m28hW0NNzxNUig1_JdW0bA7muFIJDco1daJ_1SAX9bgvoPJPyIkSekhNYctvIGXrCH6tIsPL5fs-s6J5yc9BpWXhKtNdF2LgVYPGM_6GlMwfhWUsIt4lbScANrwlgVVUifPSVi__t44qStnwPvZwobdSmHHlL57p2vFuHS0
-
-        // TODO: AdbShellSubprocessProtocol: Optimize stream graph
-
-        const [stdout, stderr] = socket.readable
-            .pipeThrough(new StructDeserializeStream(AdbShellProtocolPacket))
-            .pipeThrough(new TransformStream<AdbShellProtocolPacket, AdbShellProtocolPacket>({
-                transform: (chunk, controller) => {
-                    if (chunk.id === AdbShellProtocolId.Exit) {
-                        this._exit.resolve(new Uint8Array(chunk.data)[0]!);
-                        // We can let `StdoutDeserializeStream` to process `AdbShellProtocolId.Exit`,
-                        // but since we need this `TransformStream` to capture the exit code anyway,
-                        // terminating child streams here is killing two birds with one stone.
-                        controller.terminate();
-                        return;
-                    }
-                    controller.enqueue(chunk);
-                }
-            }))
-            .tee();
-        this._stdout = stdout
-            .pipeThrough(new StdoutDeserializeStream(AdbShellProtocolId.Stdout));
-        this._stderr = stderr
-            .pipeThrough(new StdoutDeserializeStream(AdbShellProtocolId.Stderr));
-
-        const multiplexer = new MultiplexStream<AdbShellProtocolPacketInit>();
-        multiplexer.readable
-            .pipeThrough(new StructSerializeStream(AdbShellProtocolPacket))
-            .pipeTo(socket.writable);
-
-        this._stdin = pipeFrom(
-            multiplexer.createWriteable(),
-            new StdinSerializeStream()
+        return new AdbSubprocessShellProtocol(
+            await adb.createSocket(`shell,v2,pty:${command}`),
         );
-
-        this._socketWriter = multiplexer.createWriteable().getWriter();
     }
 
-    public async resize(rows: number, cols: number) {
-        await this._socketWriter.write({
-            id: AdbShellProtocolId.WindowSizeChange,
-            data: encodeUtf8(
-                // The "correct" format is `${rows}x${cols},${x_pixels}x${y_pixels}`
-                // However, according to https://linux.die.net/man/4/tty_ioctl
-                // `x_pixels` and `y_pixels` are not used, so always passing `0` is fine.
-                `${rows}x${cols},0x0\0`
-            ),
+    static async raw(adb: Adb, command: string) {
+        return new AdbSubprocessShellProtocol(
+            await adb.createSocket(`shell,v2,raw:${command}`),
+        );
+    }
+
+    readonly #socket: AdbSocket;
+    #writer: WritableStreamDefaultWriter<MaybeConsumable<Uint8Array>>;
+
+    #stdin: WritableStream<MaybeConsumable<Uint8Array>>;
+    get stdin() {
+        return this.#stdin;
+    }
+
+    #stdout: ReadableStream<Uint8Array>;
+    get stdout() {
+        return this.#stdout;
+    }
+
+    #stderr: ReadableStream<Uint8Array>;
+    get stderr() {
+        return this.#stderr;
+    }
+
+    readonly #exit = new PromiseResolver<number>();
+    get exit() {
+        return this.#exit.promise;
+    }
+
+    constructor(socket: AdbSocket) {
+        this.#socket = socket;
+
+        let stdoutController!: PushReadableStreamController<Uint8Array>;
+        let stderrController!: PushReadableStreamController<Uint8Array>;
+        this.#stdout = new PushReadableStream<Uint8Array>((controller) => {
+            stdoutController = controller;
+        });
+        this.#stderr = new PushReadableStream<Uint8Array>((controller) => {
+            stderrController = controller;
+        });
+
+        socket.readable
+            .pipeThrough(new StructDeserializeStream(AdbShellProtocolPacket))
+            .pipeTo(
+                new WritableStream<AdbShellProtocolPacket>({
+                    write: async (chunk) => {
+                        switch (chunk.id) {
+                            case AdbShellProtocolId.Exit:
+                                this.#exit.resolve(chunk.data[0]!);
+                                break;
+                            case AdbShellProtocolId.Stdout:
+                                await stdoutController.enqueue(chunk.data);
+                                break;
+                            case AdbShellProtocolId.Stderr:
+                                await stderrController.enqueue(chunk.data);
+                                break;
+                        }
+                    },
+                }),
+            )
+            .then(
+                () => {
+                    stdoutController.close();
+                    stderrController.close();
+                    // If `#exit` has already resolved, this will be a no-op
+                    this.#exit.reject(
+                        new Error("Socket ended without exit message"),
+                    );
+                },
+                (e) => {
+                    stdoutController.error(e);
+                    stderrController.error(e);
+                    // If `#exit` has already resolved, this will be a no-op
+                    this.#exit.reject(e);
+                },
+            );
+
+        this.#writer = this.#socket.writable.getWriter();
+
+        this.#stdin = new MaybeConsumable.WritableStream<Uint8Array>({
+            write: async (chunk) => {
+                await this.#writer.write(
+                    AdbShellProtocolPacket.serialize({
+                        id: AdbShellProtocolId.Stdin,
+                        data: chunk,
+                    }),
+                );
+            },
         });
     }
 
-    public kill() {
-        return this._socket.close();
+    async resize(rows: number, cols: number) {
+        await this.#writer.write(
+            AdbShellProtocolPacket.serialize({
+                id: AdbShellProtocolId.WindowSizeChange,
+                // The "correct" format is `${rows}x${cols},${x_pixels}x${y_pixels}`
+                // However, according to https://linux.die.net/man/4/tty_ioctl
+                // `x_pixels` and `y_pixels` are unused, so always sending `0` should be fine.
+                data: encodeUtf8(`${rows}x${cols},0x0\0`),
+            }),
+        );
+    }
+
+    kill() {
+        return this.#socket.close();
     }
 }

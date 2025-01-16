@@ -3,27 +3,27 @@
 // cspell: ignore keyevent
 // cspell: ignore longpress
 
-import { AdbCommandBase } from './base.js';
+import { AdbCommandBase } from "./base.js";
 
 export class AdbPower extends AdbCommandBase {
-    public reboot(name: string = '') {
-        return this.adb.createSocketAndWait(`reboot:${name}`);
+    reboot(mode = "") {
+        return this.adb.createSocketAndWait(`reboot:${mode}`);
     }
 
-    public bootloader() {
-        return this.reboot('bootloader');
+    bootloader() {
+        return this.reboot("bootloader");
     }
 
-    public fastboot() {
-        return this.reboot('fastboot');
+    fastboot() {
+        return this.reboot("fastboot");
     }
 
-    public recovery() {
-        return this.reboot('recovery');
+    recovery() {
+        return this.reboot("recovery");
     }
 
-    public sideload() {
-        return this.reboot('sideload');
+    sideload() {
+        return this.reboot("sideload");
     }
 
     /**
@@ -31,16 +31,22 @@ export class AdbPower extends AdbCommandBase {
      *
      * Only works on some Qualcomm devices.
      */
-    public qualcommEdlMode() {
-        return this.reboot('edl');
+    qualcommEdlMode() {
+        return this.reboot("edl");
     }
 
-    public powerOff() {
-        return this.adb.subprocess.spawnAndWaitLegacy(['reboot', '-p']);
+    powerOff() {
+        return this.adb.subprocess.spawnAndWaitLegacy(["reboot", "-p"]);
     }
 
-    public powerButton(longPress: boolean = false) {
-        return this.adb.subprocess.spawnAndWaitLegacy(['input', 'keyevent', longPress ? '--longpress POWER' : 'POWER']);
+    powerButton(longPress = false) {
+        const args = ["input", "keyevent"];
+        if (longPress) {
+            args.push("--longpress");
+        }
+        args.push("POWER");
+
+        return this.adb.subprocess.spawnAndWaitLegacy(args);
     }
 
     /**
@@ -48,7 +54,7 @@ export class AdbPower extends AdbCommandBase {
      *
      * Only works on Samsung devices.
      */
-    public samsungOdin() {
-        return this.reboot('download');
+    samsungOdin() {
+        return this.reboot("download");
     }
 }

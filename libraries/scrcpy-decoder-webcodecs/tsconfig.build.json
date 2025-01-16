@@ -1,12 +1,24 @@
 {
-    "extends": "./node_modules/@yume-chan/ts-package-builder/tsconfig.base.json",
+    "extends": "./node_modules/@yume-chan/tsconfig/tsconfig.base.json",
     "compilerOptions": {
         "lib": [
             "ESNext",
             "DOM"
         ],
-        "types": [
-            "dom-webcodecs"
-        ]
-    }
+        "types": []
+    },
+    "references": [
+        {
+            "path": "../no-data-view/tsconfig.build.json"
+        },
+        {
+            "path": "../scrcpy-decoder-tinyh264/tsconfig.build.json"
+        },
+        {
+            "path": "../scrcpy/tsconfig.build.json"
+        },
+        {
+            "path": "../stream-extra/tsconfig.build.json"
+        }
+    ]
 }

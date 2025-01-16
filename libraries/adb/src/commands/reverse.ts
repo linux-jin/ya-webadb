@@ -1,12 +1,15 @@
 // cspell: ignore killforward
 
-import { AutoDisposable } from '@yume-chan/event';
-import { BufferedReadableStream, BufferedReadableStreamEndedError } from '@yume-chan/stream-extra';
-import Struct from '@yume-chan/struct';
+import { BufferedReadableStream } from "@yume-chan/stream-extra";
+import {
+    encodeUtf8,
+    ExactReadableEndedError,
+    string,
+    struct,
+} from "@yume-chan/struct";
 
-import type { Adb } from '../adb.js';
-import type { AdbIncomingSocketHandler, AdbSocket } from '../socket/index.js';
-import { decodeUtf8 } from '../utils/index.js';
+import type { Adb, AdbIncomingSocketHandler } from "../adb.js";
+import { hexToNumber, sequenceEqual } from "../utils/index.js";
 
 export interface AdbForwardListener {
     deviceSerial: string;
@@ -16,125 +19,192 @@ export interface AdbForwardListener {
     remoteName: string;
 }
 
-const AdbReverseStringResponse =
-    new Struct()
-        .string('length', { length: 4 })
-        .string('content', { lengthField: 'length', lengthFieldRadix: 16 });
+const AdbReverseStringResponse = struct(
+    {
+        length: string(4),
+        content: string({
+            field: "length",
+            convert(value: string) {
+                return Number.parseInt(value, 16);
+            },
+            back(value) {
+                return value.toString(16).padStart(4, "0");
+            },
+        }),
+    },
+    { littleEndian: true },
+);
 
-const AdbReverseErrorResponse =
-    new Struct()
-        .fields(AdbReverseStringResponse)
-        .postDeserialize((value) => {
-            throw new Error(value.content);
-        });
+export class AdbReverseError extends Error {
+    constructor(message: string) {
+        super(message);
+    }
+}
 
-export class AdbReverseCommand extends AutoDisposable {
-    protected localAddressToHandler = new Map<string, AdbIncomingSocketHandler>();
+export class AdbReverseNotSupportedError extends AdbReverseError {
+    constructor() {
+        super(
+            "ADB reverse tunnel is not supported on this device when connected wirelessly.",
+        );
+    }
+}
 
-    protected deviceAddressToLocalAddress = new Map<string, string>();
+const AdbReverseErrorResponse = struct(
+    /* #__PURE__ */ (() => AdbReverseStringResponse.fields)(),
+    {
+        littleEndian: true,
+        postDeserialize: (value) => {
+            // https://issuetracker.google.com/issues/37066218
+            // ADB on Android <9 can't create reverse tunnels when connected wirelessly (ADB over Wi-Fi),
+            // and returns this confusing "more than one device/emulator" error.
+            if (value.content === "more than one device/emulator") {
+                throw new AdbReverseNotSupportedError();
+            } else {
+                throw new AdbReverseError(value.content);
+            }
+        },
+    },
+);
 
+// Like `hexToNumber`, it's much faster than first converting `buffer` to a string
+function decimalToNumber(buffer: Uint8Array) {
+    let value = 0;
+    for (const byte of buffer) {
+        // Like `parseInt`, return when it encounters a non-digit character
+        if (byte < 48 || byte > 57) {
+            return value;
+        }
+        value = value * 10 + byte - 48;
+    }
+    return value;
+}
+
+const OKAY = encodeUtf8("OKAY");
+
+export class AdbReverseCommand {
     protected adb: Adb;
 
-    protected listening = false;
+    readonly #deviceAddressToLocalAddress = new Map<string, string>();
 
-    public constructor(adb: Adb) {
-        super();
-
+    constructor(adb: Adb) {
         this.adb = adb;
-        this.addDisposable(this.adb.addIncomingSocketHandler(this.handleIncomingSocket));
     }
 
-    protected handleIncomingSocket = async (socket: AdbSocket) => {
-        let address = socket.serviceString;
-        // ADB daemon appends `\0` to the service string
-        address = address.replace(/\0/g, '');
-        return !!(await this.localAddressToHandler.get(address)?.(socket));
-    };
-
-    private async createBufferedStream(service: string) {
+    protected async createBufferedStream(service: string) {
         const socket = await this.adb.createSocket(service);
         return new BufferedReadableStream(socket.readable);
     }
 
-    private async sendRequest(service: string) {
+    protected async sendRequest(service: string) {
         const stream = await this.createBufferedStream(service);
-        const success = decodeUtf8(await stream.read(4)) === 'OKAY';
-        if (!success) {
+
+        const response = await stream.readExactly(4);
+        if (!sequenceEqual(response, OKAY)) {
             await AdbReverseErrorResponse.deserialize(stream);
         }
+
         return stream;
     }
 
-    public async list(): Promise<AdbForwardListener[]> {
-        const stream = await this.createBufferedStream('reverse:list-forward');
+    /**
+     * Get a list of all reverse port forwarding on the device.
+     */
+    async list(): Promise<AdbForwardListener[]> {
+        const stream = await this.createBufferedStream("reverse:list-forward");
 
         const response = await AdbReverseStringResponse.deserialize(stream);
-        return response.content!.split('\n').map(line => {
-            const [deviceSerial, localName, remoteName] = line.split(' ') as [string, string, string];
-            return { deviceSerial, localName, remoteName };
-        });
+        return response.content
+            .split("\n")
+            .filter((line) => !!line)
+            .map((line) => {
+                const [deviceSerial, localName, remoteName] = line.split(
+                    " ",
+                ) as [string, string, string];
+                return { deviceSerial, localName, remoteName };
+            });
 
         // No need to close the stream, device will close it
     }
 
     /**
-     * @param deviceAddress The address adbd on device is listening on. Can be `tcp:0` to let adbd choose an available TCP port by itself.
-     * @param localAddress Native ADB client will open a connection to this address when reverse connection received. In WebADB, it's only used to uniquely identify a reverse tunnel registry, `handler` will be called to handle the connection.
-     * @param handler A callback to handle incoming connections
-     * @returns If `deviceAddress` is `tcp:0`, return `tcp:{ACTUAL_LISTENING_PORT}`; otherwise, return `deviceAddress`.
+     * Add a reverse port forwarding for a program that already listens on a port.
      */
-    public async add(
-        deviceAddress: string,
-        localAddress: string,
-        handler: AdbIncomingSocketHandler,
-    ): Promise<string> {
-        const stream = await this.sendRequest(`reverse:forward:${deviceAddress};${localAddress}`);
+    async addExternal(deviceAddress: string, localAddress: string) {
+        const stream = await this.sendRequest(
+            `reverse:forward:${deviceAddress};${localAddress}`,
+        );
 
         // `tcp:0` tells the device to pick an available port.
-        // Begin with Android 8, device will respond with the selected port for all `tcp:` requests.
-        if (deviceAddress.startsWith('tcp:')) {
-            let length: number | undefined;
+        // On Android >=8, device will respond with the selected port for all `tcp:` requests.
+        if (deviceAddress.startsWith("tcp:")) {
+            const position = stream.position;
             try {
-                length = Number.parseInt(decodeUtf8(await stream.read(4)), 16);
+                const length = hexToNumber(await stream.readExactly(4));
+                const port = decimalToNumber(await stream.readExactly(length));
+                deviceAddress = `tcp:${port}`;
             } catch (e) {
-                if (!(e instanceof BufferedReadableStreamEndedError)) {
+                if (
+                    e instanceof ExactReadableEndedError &&
+                    stream.position === position
+                ) {
+                    // Android <8 doesn't have this response.
+                    // (the stream is closed now)
+                    // Can be safely ignored.
+                } else {
                     throw e;
                 }
-
-                // Device before Android 8 doesn't have this response.
-                // (the stream is closed now)
-                // Can be safely ignored.
-            }
-
-            if (length !== undefined) {
-                const port = decodeUtf8(await stream.read(length!));
-                deviceAddress = `tcp:${Number.parseInt(port, 10)}`;
             }
         }
 
-        this.localAddressToHandler.set(localAddress, handler);
-        this.deviceAddressToLocalAddress.set(deviceAddress, localAddress);
         return deviceAddress;
-
-        // No need to close the stream, device will close it
     }
 
-    public async remove(deviceAddress: string): Promise<void> {
+    /**
+     * Add a reverse port forwarding.
+     */
+    async add(
+        deviceAddress: string,
+        handler: AdbIncomingSocketHandler,
+        localAddress?: string,
+    ): Promise<string> {
+        localAddress = await this.adb.transport.addReverseTunnel(
+            handler,
+            localAddress,
+        );
+
+        try {
+            deviceAddress = await this.addExternal(deviceAddress, localAddress);
+            this.#deviceAddressToLocalAddress.set(deviceAddress, localAddress);
+            return deviceAddress;
+        } catch (e) {
+            await this.adb.transport.removeReverseTunnel(localAddress);
+            throw e;
+        }
+    }
+
+    /**
+     * Remove a reverse port forwarding.
+     */
+    async remove(deviceAddress: string): Promise<void> {
+        const localAddress =
+            this.#deviceAddressToLocalAddress.get(deviceAddress);
+        if (localAddress) {
+            await this.adb.transport.removeReverseTunnel(localAddress);
+        }
+
         await this.sendRequest(`reverse:killforward:${deviceAddress}`);
 
-        if (this.deviceAddressToLocalAddress.has(deviceAddress)) {
-            this.localAddressToHandler.delete(this.deviceAddressToLocalAddress.get(deviceAddress)!);
-            this.deviceAddressToLocalAddress.delete(deviceAddress);
-        }
-
         // No need to close the stream, device will close it
     }
 
-    public async removeAll(): Promise<void> {
-        await this.sendRequest(`reverse:killforward-all`);
+    /**
+     * Remove all reverse port forwarding, including the ones added by other programs.
+     */
+    async removeAll(): Promise<void> {
+        await this.adb.transport.clearReverseTunnels();
+        this.#deviceAddressToLocalAddress.clear();
 
-        this.deviceAddressToLocalAddress.clear();
-        this.localAddressToHandler.clear();
+        await this.sendRequest(`reverse:killforward-all`);
 
         // No need to close the stream, device will close it
     }

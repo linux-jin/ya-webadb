@@ -1,86 +1,178 @@
-import type { WritableStream, WritableStreamDefaultWriter } from '@yume-chan/stream-extra';
+import type {
+    AndroidKeyEventAction,
+    AndroidScreenPowerMode,
+} from "../android/index.js";
+import type { ScrcpyOptions, ScrcpyScrollController } from "../base/index.js";
+import { ScrcpyControlMessageType } from "../base/index.js";
+import type {
+    ScrcpyInjectScrollControlMessage,
+    ScrcpyInjectTouchControlMessage,
+    ScrcpySetClipboardControlMessage,
+    ScrcpyUHidCreateControlMessage,
+} from "../latest.js";
 
-import type { ScrcpyInjectScrollControlMessage1_22, ScrcpyOptions } from '../options/index.js';
-import { AndroidKeyEventAction, ScrcpyInjectKeyCodeControlMessage } from './inject-keycode.js';
-import { ScrcpyInjectTextControlMessage } from './inject-text.js';
-import { ScrcpyInjectTouchControlMessage } from './inject-touch.js';
-import { ScrcpyRotateDeviceControlMessage } from './rotate-device.js';
-import { AndroidScreenPowerMode, ScrcpySetScreenPowerModeControlMessage } from './set-screen-power-mode.js';
-import { ScrcpyControlMessageType } from './type.js';
+import { EmptyControlMessage } from "./empty.js";
+import { ScrcpyInjectKeyCodeControlMessage } from "./inject-key-code.js";
+import { ScrcpyInjectTextControlMessage } from "./inject-text.js";
+import { ScrcpyControlMessageTypeMap } from "./message-type-map.js";
+import { ScrcpySetDisplayPowerControlMessage } from "./set-screen-power-mode.js";
+import { ScrcpyStartAppControlMessage } from "./start-app.js";
+import {
+    ScrcpyUHidDestroyControlMessage,
+    ScrcpyUHidInputControlMessage,
+} from "./uhid.js";
 
 export class ScrcpyControlMessageSerializer {
-    private options: ScrcpyOptions<any>;
-    /** Control message type values for current version of server */
-    private types: ScrcpyControlMessageType[];
-    private writer: WritableStreamDefaultWriter<Uint8Array>;
+    #options: ScrcpyOptions<object>;
+    #typeMap: ScrcpyControlMessageTypeMap;
+    #scrollController: ScrcpyScrollController;
 
-    public constructor(stream: WritableStream<Uint8Array>, options: ScrcpyOptions<any>) {
-        this.options = options;
-        this.types = options.getControlMessageTypes();
-        this.writer = stream.getWriter();
+    constructor(options: ScrcpyOptions<object>) {
+        this.#options = options;
+        this.#typeMap = new ScrcpyControlMessageTypeMap(options);
+        this.#scrollController = options.createScrollController();
     }
 
-    public getTypeValue(type: ScrcpyControlMessageType): number {
-        const value = this.types.indexOf(type);
-        if (value === -1) {
-            throw new Error('Not supported');
-        }
-        return value;
+    injectKeyCode(message: Omit<ScrcpyInjectKeyCodeControlMessage, "type">) {
+        return ScrcpyInjectKeyCodeControlMessage.serialize(
+            this.#typeMap.fillMessageType(
+                message,
+                ScrcpyControlMessageType.InjectKeyCode,
+            ),
+        );
     }
 
-    public injectKeyCode(message: Omit<ScrcpyInjectKeyCodeControlMessage, 'type'>) {
-        return this.writer.write(ScrcpyInjectKeyCodeControlMessage.serialize({
-            ...message,
-            type: this.getTypeValue(ScrcpyControlMessageType.InjectKeyCode),
-        }));
-    }
-
-    public injectText(text: string) {
-        return this.writer.write(ScrcpyInjectTextControlMessage.serialize({
+    injectText(text: string) {
+        return ScrcpyInjectTextControlMessage.serialize({
             text,
-            type: this.getTypeValue(ScrcpyControlMessageType.InjectText),
-        }));
-    }
-
-    public injectTouch(message: Omit<ScrcpyInjectTouchControlMessage, 'type'>) {
-        return this.writer.write(ScrcpyInjectTouchControlMessage.serialize({
-            ...message,
-            type: this.getTypeValue(ScrcpyControlMessageType.InjectTouch),
-        }));
-    }
-
-    public injectScroll(message: Omit<ScrcpyInjectScrollControlMessage1_22, 'type'>) {
-        return this.writer.write(this.options.serializeInjectScrollControlMessage({
-            ...message,
-            type: this.getTypeValue(ScrcpyControlMessageType.InjectScroll),
-        }));
-    }
-
-    public async backOrScreenOn(action: AndroidKeyEventAction) {
-        const buffer = this.options.serializeBackOrScreenOnControlMessage({
-            action,
-            type: this.getTypeValue(ScrcpyControlMessageType.BackOrScreenOn),
+            type: this.#typeMap.get(ScrcpyControlMessageType.InjectText),
         });
-
-        if (buffer) {
-            return await this.writer.write(buffer);
-        }
     }
 
-    public setScreenPowerMode(mode: AndroidScreenPowerMode) {
-        return this.writer.write(ScrcpySetScreenPowerModeControlMessage.serialize({
+    /**
+     * `pressure` is a float value between 0 and 1.
+     */
+    injectTouch(message: Omit<ScrcpyInjectTouchControlMessage, "type">) {
+        return this.#options.serializeInjectTouchControlMessage(
+            this.#typeMap.fillMessageType(
+                message,
+                ScrcpyControlMessageType.InjectTouch,
+            ),
+        );
+    }
+
+    /**
+     * `scrollX` and `scrollY` are float values between 0 and 1.
+     */
+    injectScroll(message: Omit<ScrcpyInjectScrollControlMessage, "type">) {
+        return this.#scrollController.serializeScrollMessage(
+            this.#typeMap.fillMessageType(
+                message,
+                ScrcpyControlMessageType.InjectScroll,
+            ),
+        );
+    }
+
+    backOrScreenOn(action: AndroidKeyEventAction) {
+        return this.#options.serializeBackOrScreenOnControlMessage({
+            action,
+            type: this.#typeMap.get(ScrcpyControlMessageType.BackOrScreenOn),
+        });
+    }
+
+    setDisplayPower(mode: AndroidScreenPowerMode) {
+        return ScrcpySetDisplayPowerControlMessage.serialize({
             mode,
-            type: this.getTypeValue(ScrcpyControlMessageType.SetScreenPowerMode),
-        }));
+            type: this.#typeMap.get(ScrcpyControlMessageType.SetDisplayPower),
+        });
     }
 
-    public rotateDevice() {
-        return this.writer.write(ScrcpyRotateDeviceControlMessage.serialize({
-            type: this.getTypeValue(ScrcpyControlMessageType.RotateDevice),
-        }));
+    expandNotificationPanel() {
+        return EmptyControlMessage.serialize({
+            type: this.#typeMap.get(
+                ScrcpyControlMessageType.ExpandNotificationPanel,
+            ),
+        });
     }
 
-    public close() {
-        return this.writer.close();
+    expandSettingPanel() {
+        return EmptyControlMessage.serialize({
+            type: this.#typeMap.get(
+                ScrcpyControlMessageType.ExpandSettingPanel,
+            ),
+        });
     }
-};
+
+    collapseNotificationPanel() {
+        return EmptyControlMessage.serialize({
+            type: this.#typeMap.get(
+                ScrcpyControlMessageType.CollapseNotificationPanel,
+            ),
+        });
+    }
+
+    rotateDevice() {
+        return EmptyControlMessage.serialize({
+            type: this.#typeMap.get(ScrcpyControlMessageType.RotateDevice),
+        });
+    }
+
+    setClipboard(message: Omit<ScrcpySetClipboardControlMessage, "type">) {
+        return this.#options.serializeSetClipboardControlMessage({
+            ...message,
+            type: this.#typeMap.get(ScrcpyControlMessageType.SetClipboard),
+        });
+    }
+
+    uHidCreate(message: Omit<ScrcpyUHidCreateControlMessage, "type">) {
+        if (!this.#options.serializeUHidCreateControlMessage) {
+            throw new Error("UHid not supported");
+        }
+
+        return this.#options.serializeUHidCreateControlMessage(
+            this.#typeMap.fillMessageType(
+                message,
+                ScrcpyControlMessageType.UHidCreate,
+            ),
+        );
+    }
+
+    uHidInput(message: Omit<ScrcpyUHidInputControlMessage, "type">) {
+        return ScrcpyUHidInputControlMessage.serialize(
+            this.#typeMap.fillMessageType(
+                message,
+                ScrcpyControlMessageType.UHidInput,
+            ),
+        );
+    }
+
+    uHidDestroy(id: number) {
+        return ScrcpyUHidDestroyControlMessage.serialize({
+            type: this.#typeMap.get(ScrcpyControlMessageType.UHidDestroy),
+            id,
+        });
+    }
+
+    startApp(
+        name: string,
+        options?: { forceStop?: boolean; searchByName?: boolean },
+    ) {
+        if (options?.searchByName) {
+            name = "?" + name;
+        }
+        if (options?.forceStop) {
+            name = "+" + name;
+        }
+
+        return ScrcpyStartAppControlMessage.serialize({
+            type: this.#typeMap.get(ScrcpyControlMessageType.StartApp),
+            name,
+        });
+    }
+
+    resetVideo() {
+        return EmptyControlMessage.serialize({
+            type: this.#typeMap.get(ScrcpyControlMessageType.ResetVideo),
+        });
+    }
+}

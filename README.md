@@ -1,52 +1,54 @@
-# 📱 Android Debug Bridge (ADB) for Web Browsers
+<p align="center">
+    <img alt="Tango" src="https://raw.githubusercontent.com/yume-chan/ya-webadb/main/.github/logo.svg" width="200">
+</p>
 
-[![GitHub license](https://img.shields.io/github/license/yume-chan/ya-webadb)](https://github.com/yume-chan/ya-webadb/blob/main/LICENSE)
+<h1 align="center">Tango</h1>
 
-Manipulate Android devices from any (supported) web browsers, even from another Android device.
+<p align="center">
+    ADB in your browser
+</p>
 
-[🚀 Online Demo](https://yume-chan.github.io/ya-webadb)
+<p align="center">
+    <a href="https://github.com/yume-chan/ya-webadb/blob/main/LICENSE">
+        <img alt="MIT License" src="https://img.shields.io/github/license/yume-chan/ya-webadb">
+    </a>
+    <a href="https://github.com/yume-chan/ya-webadb/releases">
+        <img alt="GitHub release" src="https://img.shields.io/github/v/release/yume-chan/ya-webadb?logo=github">
+    </a>
+    <a href="https://www.npmjs.com/package/@yume-chan/adb">
+        <img alt="npm" src="https://img.shields.io/npm/dm/%40yume-chan/adb?logo=npm">
+    </a>
+    <a href="https://discord.gg/26k3ttC2PN">
+        <img alt="Discord" src="https://img.shields.io/discord/1120215514732564502?logo=discord&logoColor=%23ffffff&label=Discord">
+    </a>
+</p>
 
-## Compatibility
+Tango is a TypeScript re-implementation of ADB (Android Debugging Bridge) client that works in Chromium-based browsers (including Chrome for Android), Node.js, and Electron.
 
-| Connection                            | Chromium-based Browsers               | Firefox | Node.js  |
-| ------------------------------------- | ------------------------------------- | ------- | -------- |
-| USB cable                             | Yes via [WebUSB]                      | No      | Possible |
-| Wireless via [WebSocket] <sup>1</sup> | Yes                                   | Yes     | Possible |
-| Wireless via TCP                      | Yes via [Direct Sockets] <sup>2</sup> | No      | Possible |
+Try it out at https://app.tangoapp.dev
 
-[WebUSB]: https://wicg.github.io/webusb/
-[WebSocket]: https://websockets.spec.whatwg.org/
-[Direct Sockets]: https://wicg.github.io/direct-sockets/
+## Documentation
 
-<sup>1</sup> Requires WebSockify softwares, see [instruction](https://github.com/yume-chan/ya-webadb/discussions/245#discussioncomment-384030) for detail.
-
-<sup>2</sup> Chrome for Android doesn't support Direct Sockets. Need extra steps to enable. See [#349](https://github.com/yume-chan/ya-webadb/issues/349) for detail.
-
-## Security concerns
-
-Accessing USB devices (especially your phone) directly from a web page can be **very dangerous**. Firefox developers even refused to implement the WebUSB standard because they [considered it to be **harmful**](https://mozilla.github.io/standards-positions/#webusb).
-
-## Features
-
-* 📁 File Management
-  * 📋 List
-  * ⬆ Upload
-  * ⬇ Download
-  * 🗑 Delete
-* 📷 Screen Capture
-* 📜 Interactiv Shell
-* ⚙ Enable ADB over WiFi
-* 📦 Install APK
-* 🎥 [Scrcpy](https://github.com/Genymobile/scrcpy) compatible client (screen mirroring and controling device)
-* 🔌 Power and reboot to different modes
-
-[📋 Project Roadmap](https://github.com/yume-chan/ya-webadb/issues/348)
+Check the latest documentation at https://docs.tangoapp.dev/
 
 ## Contribute
 
-See [CONTRIBUTE.md](./CONTRIBUTE.md)
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for how to run and develop this project.
 
-## Credits
+## Sponsors
 
-* Google for [ADB](https://android.googlesource.com/platform/packages/modules/adb) ([Apache License 2.0](./adb.NOTICE))
-* Romain Vimont for [Scrcpy](https://github.com/Genymobile/scrcpy) ([Apache License 2.0](https://github.com/Genymobile/scrcpy/blob/master/LICENSE))
+This project is tested with BrowserStack
+
+[Become a backer](https://opencollective.com/ya-webadb) and get your image on our README on Github with a link to your site.
+
+<a href="https://opencollective.com/ya-webadb/backer/0/website?requireActive=false" target="_blank"><img src="https://opencollective.com/ya-webadb/backer/0/avatar.svg?requireActive=false"></a>
+<a href="https://opencollective.com/ya-webadb/backer/1/website?requireActive=false" target="_blank"><img src="https://opencollective.com/ya-webadb/backer/1/avatar.svg?requireActive=false"></a>
+<a href="https://opencollective.com/ya-webadb/backer/2/website?requireActive=false" target="_blank"><img src="https://opencollective.com/ya-webadb/backer/2/avatar.svg?requireActive=false"></a>
+<a href="https://opencollective.com/ya-webadb/backer/3/website?requireActive=false" target="_blank"><img src="https://opencollective.com/ya-webadb/backer/3/avatar.svg?requireActive=false"></a>
+<a href="https://opencollective.com/ya-webadb/backer/4/website?requireActive=false" target="_blank"><img src="https://opencollective.com/ya-webadb/backer/4/avatar.svg?requireActive=false"></a>
+<a href="https://opencollective.com/ya-webadb/backer/5/website?requireActive=false" target="_blank"><img src="https://opencollective.com/ya-webadb/backer/5/avatar.svg?requireActive=false"></a>
+<a href="https://opencollective.com/ya-webadb/backer/6/website?requireActive=false" target="_blank"><img src="https://opencollective.com/ya-webadb/backer/6/avatar.svg?requireActive=false"></a>
+<a href="https://opencollective.com/ya-webadb/backer/7/website?requireActive=false" target="_blank"><img src="https://opencollective.com/ya-webadb/backer/7/avatar.svg?requireActive=false"></a>
+<a href="https://opencollective.com/ya-webadb/backer/8/website?requireActive=false" target="_blank"><img src="https://opencollective.com/ya-webadb/backer/8/avatar.svg?requireActive=false"></a>
+<a href="https://opencollective.com/ya-webadb/backer/9/website?requireActive=false" target="_blank"><img src="https://opencollective.com/ya-webadb/backer/9/avatar.svg?requireActive=false"></a>
+<a href="https://opencollective.com/ya-webadb/backer/10/website?requireActive=false" target="_blank"><img src="https://opencollective.com/ya-webadb/backer/10/avatar.svg?requireActive=false"></a>

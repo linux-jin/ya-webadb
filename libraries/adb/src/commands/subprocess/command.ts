@@ -1,7 +1,15 @@
-import { GatherStringStream, DecodeUtf8Stream } from '@yume-chan/stream-extra';
+import { ConcatStringStream, TextDecoderStream } from "@yume-chan/stream-extra";
 
-import { AdbCommandBase } from '../base.js';
-import { AdbSubprocessNoneProtocol, AdbSubprocessProtocol, AdbSubprocessProtocolConstructor, AdbSubprocessShellProtocol } from './protocols/index.js';
+import { AdbCommandBase } from "../base.js";
+
+import type {
+    AdbSubprocessProtocol,
+    AdbSubprocessProtocolConstructor,
+} from "./protocols/index.js";
+import {
+    AdbSubprocessNoneProtocol,
+    AdbSubprocessShellProtocol,
+} from "./protocols/index.js";
 
 export interface AdbSubprocessOptions {
     /**
@@ -29,10 +37,10 @@ export interface AdbSubprocessWaitResult {
 }
 
 export class AdbSubprocess extends AdbCommandBase {
-    private async createProtocol(
-        mode: 'pty' | 'raw',
+    async #createProtocol(
+        mode: "pty" | "raw",
         command?: string | string[],
-        options?: Partial<AdbSubprocessOptions>
+        options?: Partial<AdbSubprocessOptions>,
     ): Promise<AdbSubprocessProtocol> {
         const { protocols } = { ...DEFAULT_OPTIONS, ...options };
 
@@ -46,42 +54,48 @@ export class AdbSubprocess extends AdbCommandBase {
         }
 
         if (!Constructor) {
-            throw new Error('No specified protocol is supported by the device');
+            throw new Error("No specified protocol is supported by the device");
         }
 
         if (Array.isArray(command)) {
-            command = command.join(' ');
+            command = command.join(" ");
         } else if (command === undefined) {
             // spawn the default shell
-            command = '';
+            command = "";
         }
         return await Constructor[mode](this.adb, command);
     }
 
     /**
-     * Spawns an executable in PTY (interactive) mode.
+     * Spawns an executable in PTY mode.
+     *
+     * Redirection mode is enough for most simple commands, but PTY mode is required for
+     * commands that manipulate the terminal, such as `vi` and `less`.
      * @param command The command to run. If omitted, the default shell will be spawned.
      * @param options The options for creating the `AdbSubprocessProtocol`
      * @returns A new `AdbSubprocessProtocol` instance connecting to the spawned process.
      */
-    public shell(
+    shell(
         command?: string | string[],
-        options?: Partial<AdbSubprocessOptions>
+        options?: Partial<AdbSubprocessOptions>,
     ): Promise<AdbSubprocessProtocol> {
-        return this.createProtocol('pty', command, options);
+        return this.#createProtocol("pty", command, options);
     }
 
     /**
-     * Spawns an executable and pipe the output.
+     * Spawns an executable and redirect the standard input/output stream.
+     *
+     * Redirection mode is enough for most simple commands, but PTY mode is required for
+     * commands that manipulate the terminal, such as `vi` and `less`.
      * @param command The command to run, or an array of strings containing both command and args.
      * @param options The options for creating the `AdbSubprocessProtocol`
      * @returns A new `AdbSubprocessProtocol` instance connecting to the spawned process.
      */
-    public spawn(
+    spawn(
         command: string | string[],
-        options?: Partial<AdbSubprocessOptions>
+        options?: Partial<AdbSubprocessOptions>,
     ): Promise<AdbSubprocessProtocol> {
-        return this.createProtocol('raw', command, options);
+        return this.#createProtocol("raw", command, options);
     }
 
     /**
@@ -90,28 +104,25 @@ export class AdbSubprocess extends AdbCommandBase {
      * @param options The options for creating the `AdbSubprocessProtocol`
      * @returns The entire output of the command
      */
-    public async spawnAndWait(
+    async spawnAndWait(
         command: string | string[],
-        options?: Partial<AdbSubprocessOptions>
+        options?: Partial<AdbSubprocessOptions>,
     ): Promise<AdbSubprocessWaitResult> {
-        const shell = await this.spawn(command, options);
+        const process = await this.spawn(command, options);
 
-        const stdout = new GatherStringStream();
-        const stderr = new GatherStringStream();
-
-        const [, , exitCode] = await Promise.all([
-            shell.stdout
-                .pipeThrough(new DecodeUtf8Stream())
-                .pipeTo(stdout),
-            shell.stderr
-                .pipeThrough(new DecodeUtf8Stream())
-                .pipeTo(stderr),
-            shell.exit
+        const [stdout, stderr, exitCode] = await Promise.all([
+            process.stdout
+                .pipeThrough(new TextDecoderStream())
+                .pipeThrough(new ConcatStringStream()),
+            process.stderr
+                .pipeThrough(new TextDecoderStream())
+                .pipeThrough(new ConcatStringStream()),
+            process.exit,
         ]);
 
         return {
-            stdout: stdout.result,
-            stderr: stderr.result,
+            stdout,
+            stderr,
             exitCode,
         };
     }
@@ -121,11 +132,10 @@ export class AdbSubprocess extends AdbCommandBase {
      * @param command The command to run
      * @returns The entire output of the command
      */
-    public async spawnAndWaitLegacy(command: string | string[]): Promise<string> {
-        const { stdout } = await this.spawnAndWait(
-            command,
-            { protocols: [AdbSubprocessNoneProtocol] }
-        );
+    async spawnAndWaitLegacy(command: string | string[]): Promise<string> {
+        const { stdout } = await this.spawnAndWait(command, {
+            protocols: [AdbSubprocessNoneProtocol],
+        });
         return stdout;
     }
 }

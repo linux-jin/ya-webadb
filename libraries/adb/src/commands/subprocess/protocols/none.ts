@@ -1,8 +1,9 @@
-import { DuplexStreamFactory, ReadableStream } from '@yume-chan/stream-extra';
+import type { MaybeConsumable, WritableStream } from "@yume-chan/stream-extra";
+import { ReadableStream } from "@yume-chan/stream-extra";
 
-import type { Adb } from '../../../adb.js';
-import type { AdbSocket } from '../../../socket/index.js';
-import type { AdbSubprocessProtocol } from './types.js';
+import type { Adb, AdbSocket } from "../../../adb.js";
+
+import type { AdbSubprocessProtocol } from "./types.js";
 
 /**
  * The legacy shell
@@ -13,59 +14,68 @@ import type { AdbSubprocessProtocol } from './types.js';
  * * `resize`: No
  */
 export class AdbSubprocessNoneProtocol implements AdbSubprocessProtocol {
-    public static isSupported() { return true; }
-
-    public static async pty(adb: Adb, command: string) {
-        return new AdbSubprocessNoneProtocol(await adb.createSocket(`shell:${command}`));
+    static isSupported() {
+        return true;
     }
 
-    public static async raw(adb: Adb, command: string) {
+    static async pty(adb: Adb, command: string) {
+        return new AdbSubprocessNoneProtocol(
+            await adb.createSocket(`shell:${command}`),
+        );
+    }
+
+    static async raw(adb: Adb, command: string) {
         // `shell,raw:${command}` also triggers raw mode,
-        // But is not supported before Android 7.
-        return new AdbSubprocessNoneProtocol(await adb.createSocket(`exec:${command}`));
+        // But is not supported on Android version <7.
+        return new AdbSubprocessNoneProtocol(
+            await adb.createSocket(`exec:${command}`),
+        );
     }
 
-    private readonly socket: AdbSocket;
-
-    private readonly duplex: DuplexStreamFactory<Uint8Array, Uint8Array>;
+    readonly #socket: AdbSocket;
 
     // Legacy shell forwards all data to stdin.
-    public get stdin() { return this.socket.writable; }
+    get stdin(): WritableStream<MaybeConsumable<Uint8Array>> {
+        return this.#socket.writable;
+    }
 
-    private _stdout: ReadableStream<Uint8Array>;
     /**
      * Legacy shell mixes stdout and stderr.
      */
-    public get stdout() { return this._stdout; }
+    get stdout(): ReadableStream<Uint8Array> {
+        return this.#socket.readable;
+    }
 
-    private _stderr: ReadableStream<Uint8Array>;
+    #stderr: ReadableStream<Uint8Array>;
     /**
      * `stderr` will always be empty.
      */
-    public get stderr() { return this._stderr; }
+    get stderr(): ReadableStream<Uint8Array> {
+        return this.#stderr;
+    }
 
-    private _exit: Promise<number>;
-    public get exit() { return this._exit; }
+    #exit: Promise<number>;
+    get exit() {
+        return this.#exit;
+    }
 
-    public constructor(socket: AdbSocket) {
-        this.socket = socket;
+    constructor(socket: AdbSocket) {
+        this.#socket = socket;
 
-        this.duplex = new DuplexStreamFactory<Uint8Array, Uint8Array>({
-            close: async () => {
-                await this.socket.close();
+        this.#stderr = new ReadableStream({
+            start: async (controller) => {
+                await this.#socket.closed;
+                controller.close();
             },
         });
-
-        this._stdout = this.duplex.wrapReadable(this.socket.readable);
-        this._stderr = this.duplex.wrapReadable(new ReadableStream());
-        this._exit = this.duplex.closed.then(() => 0);
+        this.#exit = socket.closed.then(() => 0);
     }
 
-    public resize() {
-        // Not supported
+    resize() {
+        // Not supported, but don't throw.
     }
 
-    public kill() {
-        return this.duplex.close();
+    async kill() {
+        await this.#socket.close();
     }
 }

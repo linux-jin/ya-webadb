@@ -1,21 +1,33 @@
-import type { ValueOrPromise } from "@yume-chan/struct";
-import { ReadableStream, ReadableStreamDefaultController, ReadableStreamDefaultReader } from "./stream.js";
+import type { MaybePromiseLike } from "@yume-chan/async";
 
-export type WrapReadableStreamStart<T> = (controller: ReadableStreamDefaultController<T>) => ValueOrPromise<ReadableStream<T>>;
+import type {
+    QueuingStrategy,
+    ReadableStreamDefaultController,
+    ReadableStreamDefaultReader,
+} from "./stream.js";
+import { ReadableStream } from "./stream.js";
+
+export type WrapReadableStreamStart<T> = (
+    controller: ReadableStreamDefaultController<T>,
+) => MaybePromiseLike<ReadableStream<T>>;
 
 export interface ReadableStreamWrapper<T> {
     start: WrapReadableStreamStart<T>;
-    cancel?(reason?: any): ValueOrPromise<void>;
-    close?(): ValueOrPromise<void>;
+    cancel?: (reason?: unknown) => MaybePromiseLike<void>;
+    close?: () => MaybePromiseLike<void>;
+    error?: (reason?: unknown) => MaybePromiseLike<void>;
 }
 
 function getWrappedReadableStream<T>(
-    wrapper: ReadableStream<T> | WrapReadableStreamStart<T> | ReadableStreamWrapper<T>,
-    controller: ReadableStreamDefaultController<T>
+    wrapper:
+        | ReadableStream<T>
+        | WrapReadableStreamStart<T>
+        | ReadableStreamWrapper<T>,
+    controller: ReadableStreamDefaultController<T>,
 ) {
-    if ('start' in wrapper) {
+    if ("start" in wrapper) {
         return wrapper.start(controller);
-    } else if (typeof wrapper === 'function') {
+    } else if (typeof wrapper === "function") {
         return wrapper(controller);
     } else {
         // Can't use `wrapper instanceof ReadableStream`
@@ -31,40 +43,57 @@ function getWrappedReadableStream<T>(
  * 2. Synchronously create a `ReadableStream` by asynchronously return another `ReadableStream`.
  * 3. Convert native `ReadableStream`s to polyfilled ones so they can `pipe` between.
  */
-export class WrapReadableStream<T> extends ReadableStream<T>{
-    public readable!: ReadableStream<T>;
+export class WrapReadableStream<T> extends ReadableStream<T> {
+    readable!: ReadableStream<T>;
 
-    private reader!: ReadableStreamDefaultReader<T>;
+    #reader!: ReadableStreamDefaultReader<T>;
 
-    public constructor(wrapper: ReadableStream<T> | WrapReadableStreamStart<T> | ReadableStreamWrapper<T>) {
-        super({
-            start: async (controller) => {
-                // `start` is invoked before `ReadableStream`'s constructor finish,
-                // so using `this` synchronously causes
-                // "Must call super constructor in derived class before accessing 'this' or returning from derived constructor".
-                // Queue a microtask to avoid this.
-                await Promise.resolve();
+    constructor(
+        wrapper:
+            | ReadableStream<T>
+            | WrapReadableStreamStart<T>
+            | ReadableStreamWrapper<T>,
+        strategy?: QueuingStrategy<T>,
+    ) {
+        super(
+            {
+                start: async (controller) => {
+                    const readable = await getWrappedReadableStream(
+                        wrapper,
+                        controller,
+                    );
+                    // `start` is called in `super()`, so can't use `this` synchronously.
+                    // but it's fine after the first `await`
+                    this.readable = readable;
+                    this.#reader = this.readable.getReader();
+                },
+                pull: async (controller) => {
+                    const { done, value } = await this.#reader
+                        .read()
+                        .catch((e) => {
+                            if ("error" in wrapper) {
+                                wrapper.error(e);
+                            }
+                            throw e;
+                        });
 
-                this.readable = await getWrappedReadableStream(wrapper, controller);
-                this.reader = this.readable.getReader();
-            },
-            cancel: async (reason) => {
-                await this.reader.cancel(reason);
-                if ('cancel' in wrapper) {
-                    await wrapper.cancel?.(reason);
-                }
-            },
-            pull: async (controller) => {
-                const result = await this.reader.read();
-                if (result.done) {
-                    controller.close();
-                    if ('close' in wrapper) {
-                        await wrapper.close?.();
+                    if (done) {
+                        controller.close();
+                        if ("close" in wrapper) {
+                            await wrapper.close?.();
+                        }
+                    } else {
+                        controller.enqueue(value);
                     }
-                } else {
-                    controller.enqueue(result.value);
-                }
-            }
-        });
+                },
+                cancel: async (reason) => {
+                    await this.#reader.cancel(reason);
+                    if ("cancel" in wrapper) {
+                        await wrapper.cancel?.(reason);
+                    }
+                },
+            },
+            strategy,
+        );
     }
 }

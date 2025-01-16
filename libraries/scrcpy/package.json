@@ -1,7 +1,7 @@
 {
     "name": "@yume-chan/scrcpy",
-    "version": "0.0.16",
-    "description": "TypeScript implementation of Scrcpy.",
+    "version": "1.1.0",
+    "description": "TypeScript implementation of Scrcpy client.",
     "keywords": [
         "adb",
         "android-phone",
@@ -22,41 +22,28 @@
     "bugs": {
         "url": "https://github.com/yume-chan/ya-webadb/issues"
     },
-    "bin": {
-        "fetch-scrcpy-server": "scripts/fetch-server.cjs"
-    },
     "type": "module",
     "main": "esm/index.js",
     "types": "esm/index.d.ts",
+    "sideEffects": false,
     "scripts": {
         "build": "tsc -b tsconfig.build.json",
-        "build:watch": "tsc -b tsconfig.build.json",
-        "test": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --coverage",
-        "prepublishOnly": "npm run build"
+        "lint": "run-eslint && prettier src/**/*.ts --write --tab-width 4",
+        "prepublishOnly": "npm run build",
+        "test": "run-test"
     },
     "dependencies": {
-        "@yume-chan/adb": "workspace:^0.0.16",
-        "@yume-chan/async": "^2.2.0",
-        "@yume-chan/event": "workspace:^0.0.16",
-        "@yume-chan/stream-extra": "workspace:^0.0.16",
-        "@yume-chan/struct": "workspace:^0.0.16",
-        "tslib": "^2.4.0"
+        "@yume-chan/async": "^4.0.2",
+        "@yume-chan/no-data-view": "workspace:^",
+        "@yume-chan/stream-extra": "workspace:^",
+        "@yume-chan/struct": "workspace:^"
     },
     "devDependencies": {
-        "@jest/globals": "^28.1.2",
-        "@yume-chan/ts-package-builder": "workspace:^1.0.0",
-        "cross-env": "^7.0.3",
-        "gh-release-fetch": "^3.0.2",
-        "jest": "^28.1.2",
-        "ts-jest": "^28.0.5",
-        "typescript": "^4.7.4"
-    },
-    "peerDependencies": {
-        "gh-release-fetch": "^3.0.2"
-    },
-    "peerDependenciesMeta": {
-        "gh-release-fetch": {
-            "optional": true
-        }
+        "@types/node": "^22.10.5",
+        "@yume-chan/eslint-config": "workspace:^",
+        "@yume-chan/test-runner": "workspace:^",
+        "@yume-chan/tsconfig": "workspace:^",
+        "prettier": "^3.4.2",
+        "typescript": "^5.7.3"
     }
 }

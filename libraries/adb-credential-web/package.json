@@ -1,7 +1,7 @@
 {
     "name": "@yume-chan/adb-credential-web",
-    "version": "0.0.16",
-    "description": "Credential Store for `@yume-chan/adb` using Web LocalStorage API.",
+    "version": "1.1.0",
+    "description": "Credential Store for `@yume-chan/adb` using WebCrypto and IndexedDB APIs.",
     "keywords": [
         "adb"
     ],
@@ -23,17 +23,19 @@
     "type": "module",
     "main": "esm/index.js",
     "types": "esm/index.d.ts",
+    "sideEffects": false,
     "scripts": {
-        "build": "build-ts-package",
-        "build:watch": "build-ts-package --incremental",
+        "build": "tsc -b tsconfig.build.json",
+        "lint": "run-eslint && prettier src/**/*.ts --write --tab-width 4",
         "prepublishOnly": "npm run build"
     },
-    "devDependencies": {
-        "typescript": "^4.7.4",
-        "@yume-chan/ts-package-builder": "workspace:^1.0.0"
-    },
     "dependencies": {
-        "@yume-chan/adb": "workspace:^0.0.16",
-        "tslib": "^2.4.0"
+        "@yume-chan/adb": "workspace:^"
+    },
+    "devDependencies": {
+        "@yume-chan/eslint-config": "workspace:^",
+        "@yume-chan/tsconfig": "workspace:^",
+        "prettier": "^3.4.2",
+        "typescript": "^5.7.3"
     }
 }
